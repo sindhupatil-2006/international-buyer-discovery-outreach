@@ -1,14 +1,13 @@
 const axios = require('axios');
 const env = require('../config/env');
 const Settings = require('../models/Settings');
-const { processSerpItem } = require('../utils/emailExtractor');
+const { processSerpItemAsync } = require('../utils/emailExtractor');
 const logger = require('../utils/logger');
 
 /**
- * Perform Intelligent International Buyer Search via SerpAPI or Demo Mode Fallback
+ * Check if SerpAPI Key is configured for user or system env
  */
-async function searchBuyers({ userId, niche, country, limit = 10 }) {
-  // Check user settings for custom SerpAPI key, otherwise system env
+async function getSerpApiKey(userId) {
   let apiKey = env.serpApiKey;
   if (userId) {
     const settings = await Settings.getByUserId(userId);
@@ -16,36 +15,57 @@ async function searchBuyers({ userId, niche, country, limit = 10 }) {
       apiKey = settings.serpapiKey;
     }
   }
+  return apiKey;
+}
 
-  // If no API key is set, operate in DEMO MODE with realistic curated buyer data
+/**
+ * Perform Real International Buyer Search via SerpAPI or Demo Mode Fallback
+ */
+async function searchBuyers({ userId, niche, country, limit = 10 }) {
+  const apiKey = await getSerpApiKey(userId);
+
+  logger.info(`[BUYER SEARCH] Niche: "${niche}", Country: "${country}", Limit: ${limit}`);
+
+  // Step 6: If SERPAPI_KEY is missing, return clearly marked demo data
   if (!apiKey) {
-    logger.info(`[DEMO MODE] SerpAPI key not found. Returning demo buyers for niche: "${niche}", country: "${country}"`);
-    return getDemoBuyers(niche, country, limit);
+    logger.info(`[DEMO MODE] SERPAPI_KEY not configured. Returning demo buyers.`);
+    const demo = getDemoBuyers(niche, country, limit);
+    return {
+      demoMode: true,
+      isDemo: true,
+      buyers: demo.buyers
+    };
   }
 
   try {
-    // Intelligent Search Query Construction
+    // Step 3: Search Query Construction
     // Targeting wholesale distributors, buyers, importers with explicit contact hints
-    const searchQuery = `"${niche}" "${country}" ("contact@" OR "sales@" OR "info@" OR "wholesale@" OR "inquiry@")`;
+    const searchQuery = `"${niche}" "${country}" contact`;
     
-    logger.info(`Invoking SerpAPI with query: ${searchQuery}`);
+    logger.info(`[SERPAPI] Request started`);
 
     const response = await axios.get('https://serpapi.com/search.json', {
       params: {
         q: searchQuery,
         api_key: apiKey,
         engine: 'google',
-        num: Math.min(limit * 2, 30), // Fetch slightly more to account for filtering & deduplication
-        gl: getCountryCode(country) // Geolocation parameter if supported
+        num: Math.min(limit * 2, 20), // Fetch adequate results for deduplication
+        gl: getCountryCode(country)
       },
       timeout: 10000
     });
 
+    logger.info(`[SERPAPI] Response received`);
+
     const organicResults = response.data.organic_results || [];
 
     if (organicResults.length === 0) {
-      logger.info('SerpAPI returned zero organic results. Falling back to demo data.');
-      return getDemoBuyers(niche, country, limit);
+      logger.info('[BUYER SEARCH] 0 results returned from SerpAPI.');
+      return {
+        demoMode: false,
+        isDemo: false,
+        buyers: []
+      };
     }
 
     const buyers = [];
@@ -53,9 +73,9 @@ async function searchBuyers({ userId, niche, country, limit = 10 }) {
     const seenEmails = new Set();
 
     for (const item of organicResults) {
-      const buyer = processSerpItem(item, country);
+      const buyer = await processSerpItemAsync(item, country);
 
-      // Skip duplicates by domain or email
+      // Step 3.9: Deduplicate by website domain or email
       if (buyer.website && seenDomains.has(buyer.website)) continue;
       if (buyer.email && seenEmails.has(buyer.email)) continue;
 
@@ -67,103 +87,82 @@ async function searchBuyers({ userId, niche, country, limit = 10 }) {
       if (buyers.length >= limit) break;
     }
 
+    logger.info(`[BUYER SEARCH] ${buyers.length} results processed`);
+
     return {
+      demoMode: false,
       isDemo: false,
-      buyers: buyers.length > 0 ? buyers : getDemoBuyers(niche, country, limit).buyers
+      buyers
     };
 
   } catch (err) {
-    logger.error(`SerpAPI Search failed (${err.message}). Falling back to Demo Mode.`);
-    const demo = getDemoBuyers(niche, country, limit);
-    demo.error = `Search API Warning: ${err.message}. Showing demo results.`;
-    return demo;
+    logger.error(`[SERPAPI ERROR] Search failed (${err.message})`);
+    throw new Error(`Search API Error: ${err.response?.data?.error || err.message}`);
   }
 }
 
 /**
- * Realistic Demo Buyers Generator
+ * Realistic Curated Demo Buyers Generator (Fallback when SERPAPI_KEY is missing)
  */
 function getDemoBuyers(niche, country, limit = 10) {
   const normalizedCountry = country || 'United States';
-  const cleanNiche = niche || 'General Import & Wholesale';
+  const cleanNiche = niche || 'Home Decor Wholesale Importers';
 
   const demoPool = [
     {
-      companyName: `${cleanNiche.split(' ')[0]} Direct Wholesale Ltd`,
-      email: `procurement@${cleanNiche.toLowerCase().replace(/[^a-z0-9]/g, '')}wholesaledirect.com`,
-      website: `https://www.${cleanNiche.toLowerCase().replace(/[^a-z0-9]/g, '')}wholesaledirect.com`,
+      companyName: `Aura Home Decor Wholesalers`,
+      email: `procurement@aurahomedecorwholesalers.com`,
+      website: `https://www.aurahomedecorwholesalers.com`,
       country: normalizedCountry,
-      description: `Leading international distributor and buyer specializing in ${cleanNiche} for tier-1 retail chains across ${normalizedCountry}.`,
-      industry: `${cleanNiche} & Trade`,
+      description: `Major distributor of artisanal home decor, ceramic vases, and modern furniture for retail chains across ${normalizedCountry}.`,
+      industry: `Home Decor`,
       sourceUrl: `https://google.com/search?q=${encodeURIComponent(niche)}`,
       emailVerified: true,
       emailSource: 'serpapi_snippet'
     },
     {
-      companyName: `Apex Global Sourcing & Importers`,
-      email: `purchasing@apexglobalsourcing.org`,
-      website: `https://www.apexglobalsourcing.org`,
+      companyName: `Pacific Rim Decor & Furnishings`,
+      email: `purchasing@pacificrimdecor.org`,
+      website: `https://www.pacificrimdecor.org`,
       country: normalizedCountry,
-      description: `Premier import-export conglomerate sourcing high-volume ${cleanNiche} for regional department stores.`,
-      industry: 'Import & Supply Chain',
+      description: `High-volume wholesale importer sourcing handcrafted textiles and living room decor items.`,
+      industry: 'Home Decor',
       sourceUrl: `https://google.com/search?q=${encodeURIComponent(niche)}`,
       emailVerified: true,
       emailSource: 'serpapi_snippet'
     },
     {
-      companyName: `Pacific Rim Trade Corp`,
-      email: `contact@pacificrimtraders.com`,
-      website: `https://www.pacificrimtraders.com`,
+      companyName: `Vanguard Living Group LLC`,
+      email: null, // Realistic demo item with no email to test null state
+      website: `https://www.vanguardlivinggroup.com`,
       country: normalizedCountry,
-      description: `Established international buyer seeking direct factory partnerships in ${cleanNiche}.`,
-      industry: 'Wholesale Trade',
+      description: `Commercial trade partner buying bulk shipment of modern decor accessories and wall art.`,
+      industry: 'Home Decor',
       sourceUrl: `https://google.com/search?q=${encodeURIComponent(niche)}`,
       emailVerified: false,
-      emailSource: 'estimated_domain'
+      emailSource: 'not_found'
     },
     {
-      companyName: `EuroAsia Retail Partners`,
-      email: `sales@euroasia-retail.eu`,
-      website: `https://www.euroasia-retail.eu`,
+      companyName: `Crown Commercial Home Trade`,
+      email: `trade@crowncommercialhometrade.com`,
+      website: `https://www.crowncommercialhometrade.com`,
       country: normalizedCountry,
-      description: `B2B distributor expanding market presence in high-quality ${cleanNiche} products.`,
-      industry: 'Retail Distribution',
+      description: `Wholesale distributor seeking factory-direct export partnerships for luxury decor collections.`,
+      industry: 'Home Decor',
       sourceUrl: `https://google.com/search?q=${encodeURIComponent(niche)}`,
       emailVerified: true,
       emailSource: 'serpapi_snippet'
     },
     {
-      companyName: `Vanguard Supply Chain Network`,
-      email: `info@vanguard-supply.net`,
-      website: `https://www.vanguard-supply.net`,
+      companyName: `Horizon Decor Partners`,
+      email: `buy@horizondecorpartners.co`,
+      website: `https://www.horizondecorpartners.co`,
       country: normalizedCountry,
-      description: `Logistics and commercial trade house procuring bulk shipments of ${cleanNiche}.`,
-      industry: 'Supply Chain',
-      sourceUrl: `https://google.com/search?q=${encodeURIComponent(niche)}`,
-      emailVerified: false,
-      emailSource: 'estimated_domain'
-    },
-    {
-      companyName: `Crown Commercial Importers`,
-      email: `trade@crowncommercialimport.com`,
-      website: `https://www.crowncommercialimport.com`,
-      country: normalizedCountry,
-      description: `High-volume wholesale buyer focusing on premium handcrafted and factory-direct ${cleanNiche}.`,
-      industry: 'Global Imports',
+      description: `Multi-channel home accents distributor managing nationwide retail inventory.`,
+      industry: 'Home Decor',
       sourceUrl: `https://google.com/search?q=${encodeURIComponent(niche)}`,
       emailVerified: true,
-      emailSource: 'serpapi_snippet'
-    },
-    {
-      companyName: `Horizon Global Ventures`,
-      email: `buy@horizonglobalventures.co`,
-      website: `https://www.horizonglobalventures.co`,
-      country: normalizedCountry,
-      description: `Multi-channel distributor managing private label inventory for ${cleanNiche}.`,
-      industry: 'Private Label & Distribution',
-      sourceUrl: `https://google.com/search?q=${encodeURIComponent(niche)}`,
-      emailVerified: false,
-      emailSource: 'estimated_domain'
+      emailSource: 'website_contact_page'
     }
   ];
 
@@ -174,7 +173,7 @@ function getDemoBuyers(niche, country, limit = 10) {
 }
 
 /**
- * Convert Country Name to 2-letter Country Code
+ * Convert Country Name to 2-letter Country Code for SerpAPI
  */
 function getCountryCode(country) {
   const map = {
@@ -194,5 +193,6 @@ function getCountryCode(country) {
 }
 
 module.exports = {
-  searchBuyers
+  searchBuyers,
+  getSerpApiKey
 };

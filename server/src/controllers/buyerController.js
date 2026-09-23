@@ -1,7 +1,25 @@
 const Buyer = require('../models/Buyer');
 const Search = require('../models/Search');
-const { searchBuyers } = require('../services/buyerSearchService');
+const { searchBuyers, getSerpApiKey } = require('../services/buyerSearchService');
 const logger = require('../utils/logger');
+
+// @desc    Get SerpAPI Integration Status
+// @route   GET /api/buyers/api-status
+exports.getApiStatus = async (req, res, next) => {
+  try {
+    const userId = req.user ? req.user.id : null;
+    const apiKey = await getSerpApiKey(userId);
+    const configured = Boolean(apiKey);
+
+    res.json({
+      configured,
+      provider: 'SerpAPI',
+      demoMode: !configured
+    });
+  } catch (err) {
+    next(err);
+  }
+};
 
 // @desc    Discover International Buyers via Search API
 // @route   POST /api/buyers/search
@@ -10,24 +28,55 @@ exports.search = async (req, res, next) => {
     const userId = req.user.id;
     const { niche, country, limit = 10 } = req.body;
 
-    logger.info(`User ${userId} requested buyer discovery: Niche="${niche}", Country="${country}"`);
+    // Request Validation (Step 3)
+    if (!niche || typeof niche !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid buyer niche is required',
+        errorCode: 'INVALID_NICHE'
+      });
+    }
 
-    const result = await searchBuyers({
-      userId,
-      niche,
-      country,
-      limit: parseInt(limit, 10)
-    });
+    if (!country || typeof country !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid target country is required',
+        errorCode: 'INVALID_COUNTRY'
+      });
+    }
+
+    const parsedLimit = Math.min(Math.max(parseInt(limit || 10, 10), 1), 50);
+
+    let result;
+    try {
+      result = await searchBuyers({
+        userId,
+        niche: niche.trim(),
+        country: country.trim(),
+        limit: parsedLimit
+      });
+    } catch (apiErr) {
+      logger.error(`Search Controller caught API failure: ${apiErr.message}`);
+      return res.status(500).json({
+        success: false,
+        message: 'Unable to search buyers at this time. Please check your API configuration or network connection.',
+        errorCode: 'SEARCH_API_ERROR'
+      });
+    }
 
     const discoveredBuyers = result.buyers || [];
 
     // Save search attempt in history
-    await Search.create({
-      userId,
-      niche,
-      country,
-      resultsCount: discoveredBuyers.length
-    });
+    try {
+      await Search.create({
+        userId,
+        niche: niche.trim(),
+        country: country.trim(),
+        resultsCount: discoveredBuyers.length
+      });
+    } catch (dbErr) {
+      logger.warn(`Failed to save search history log: ${dbErr.message}`);
+    }
 
     // Save discovered buyers into database
     const savedBuyers = [];
@@ -36,11 +85,11 @@ exports.search = async (req, res, next) => {
         const id = await Buyer.create({
           userId,
           companyName: b.companyName,
-          email: b.email,
+          email: b.email || null, // Preserve null when no email found - NO FAKE EMAILS
           website: b.website,
           country: b.country,
           description: b.description,
-          industry: b.industry,
+          industry: b.industry || 'Home Decor',
           sourceUrl: b.sourceUrl,
           emailVerified: b.emailVerified,
           emailSource: b.emailSource
@@ -52,15 +101,17 @@ exports.search = async (req, res, next) => {
       }
     }
 
+    const finalBuyers = savedBuyers.length > 0 ? savedBuyers : discoveredBuyers;
+
     res.json({
       success: true,
+      demoMode: result.demoMode,
       isDemo: result.isDemo,
-      warning: result.error || null,
-      message: result.isDemo
-        ? 'Demo Mode — Configure SERPAPI_KEY in Settings for live SerpAPI buyer discovery.'
-        : `Successfully discovered ${savedBuyers.length} buyers via API`,
-      count: savedBuyers.length,
-      buyers: savedBuyers.length > 0 ? savedBuyers : discoveredBuyers
+      message: result.demoMode
+        ? 'Demo Mode Active — Configure SERPAPI_KEY in Settings for live buyer discovery.'
+        : `Live API Connected — Discovered ${finalBuyers.length} buyers via SerpAPI`,
+      count: finalBuyers.length,
+      buyers: finalBuyers
     });
   } catch (err) {
     next(err);

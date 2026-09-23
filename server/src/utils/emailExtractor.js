@@ -1,3 +1,6 @@
+const axios = require('axios');
+const logger = require('./logger');
+
 /**
  * Email Extraction & Domain Sanitization Utility
  */
@@ -11,17 +14,22 @@ const EMAIL_REGEX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 function extractEmailsFromText(text) {
   if (!text || typeof text !== 'string') return [];
   const matches = text.match(EMAIL_REGEX) || [];
+  
   // Filter out common false positives like file extensions or placeholder emails
   const cleanEmails = matches.filter(email => {
     const lower = email.toLowerCase();
     return !lower.endsWith('.png') &&
            !lower.endsWith('.jpg') &&
            !lower.endsWith('.jpeg') &&
+           !lower.endsWith('.gif') &&
            !lower.endsWith('.svg') &&
+           !lower.endsWith('.webp') &&
            !lower.includes('example.com') &&
            !lower.includes('sentry.io') &&
            !lower.includes('wixpress.com') &&
-           !lower.includes('schema.org');
+           !lower.includes('schema.org') &&
+           !lower.includes('domain.com') &&
+           !lower.includes('yoursite.com');
   });
   return Array.from(new Set(cleanEmails));
 }
@@ -65,9 +73,40 @@ function extractCompanyName(title, domain) {
 }
 
 /**
- * Generates structured buyer object from SerpAPI search item
+ * Secondary Process: Fetch publicly accessible website contact page to extract publicly listed email
  */
-function processSerpItem(item, country) {
+async function fetchEmailFromWebsite(websiteUrl) {
+  if (!websiteUrl) return null;
+  try {
+    let target = websiteUrl.trim();
+    if (!target.startsWith('http://') && !target.startsWith('https://')) {
+      target = 'https://' + target;
+    }
+    
+    const response = await axios.get(target, {
+      timeout: 3500,
+      maxRedirects: 2,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+
+    if (typeof response.data === 'string') {
+      const found = extractEmailsFromText(response.data);
+      if (found.length > 0) {
+        return found[0];
+      }
+    }
+  } catch (err) {
+    // Safe timeout or network restriction — silent fallback to null
+  }
+  return null;
+}
+
+/**
+ * Generates normalized buyer object from SerpAPI search item
+ */
+async function processSerpItemAsync(item, country) {
   const title = item.title || '';
   const snippet = item.snippet || item.description || '';
   const website = item.link || item.url || '';
@@ -75,34 +114,33 @@ function processSerpItem(item, country) {
   const companyName = item.source || extractCompanyName(title, domain);
 
   const textToScan = `${title} ${snippet}`;
-  const foundEmails = extractEmailsFromText(textToScan);
+  const snippetEmails = extractEmailsFromText(textToScan);
 
-  let email = '';
+  let email = null;
   let emailVerified = false;
-  let emailSource = '';
+  let emailSource = 'not_found';
 
-  if (foundEmails.length > 0) {
-    email = foundEmails[0];
+  if (snippetEmails.length > 0) {
+    email = snippetEmails[0];
     emailVerified = true;
     emailSource = 'serpapi_snippet';
-  } else if (domain) {
-    // Structural estimated contact email based on domain
-    email = `contact@${domain}`;
-    emailVerified = false;
-    emailSource = 'estimated_domain';
-  } else {
-    email = `sales@${companyName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'buyer'}.com`;
-    emailVerified = false;
-    emailSource = 'estimated_name';
+  } else if (website) {
+    // Step 5: Secondary Process - Safe fetch website for public contact email
+    const fetchedEmail = await fetchEmailFromWebsite(website);
+    if (fetchedEmail) {
+      email = fetchedEmail;
+      emailVerified = false;
+      emailSource = 'website_contact_page';
+    }
   }
 
   return {
     companyName: companyName || 'Global Business Buyer',
-    email,
+    email: email || null, // Real email or null - NO INVENTED FAKE EMAILS
     website: website || (domain ? `https://${domain}` : ''),
     country: country || 'United States',
     description: snippet || `Discovered international buyer in ${country}`,
-    industry: 'Wholesale & Distribution',
+    industry: 'Home Decor & Trade',
     sourceUrl: website,
     emailVerified,
     emailSource
@@ -113,5 +151,6 @@ module.exports = {
   extractEmailsFromText,
   extractDomain,
   extractCompanyName,
-  processSerpItem
+  fetchEmailFromWebsite,
+  processSerpItemAsync
 };

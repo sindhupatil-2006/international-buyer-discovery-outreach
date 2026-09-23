@@ -19,8 +19,8 @@ const BuyerTable = ({ buyers = [], onSelectBuyer, onViewBuyer, onDeleteBuyer }) 
 
   const filteredBuyers = buyers.filter((buyer) => {
     const matchesSearch =
-      buyer.companyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      buyer.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (buyer.companyName && buyer.companyName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (buyer.email && buyer.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (buyer.description && buyer.description.toLowerCase().includes(searchTerm.toLowerCase()));
 
     const matchesCountry = selectedCountry === 'ALL' || buyer.country === selectedCountry;
@@ -96,8 +96,8 @@ const BuyerTable = ({ buyers = [], onSelectBuyer, onViewBuyer, onDeleteBuyer }) 
                 </td>
               </tr>
             ) : (
-              filteredBuyers.map((buyer) => (
-                <tr key={buyer.id || buyer.email} className="hover:bg-blue-50/40 transition-colors group">
+              filteredBuyers.map((buyer, idx) => (
+                <tr key={buyer.id || buyer.email || `buyer-${idx}`} className="hover:bg-blue-50/40 transition-colors group">
                   <td className="py-4 px-6 font-bold text-slate-900">
                     <div className="flex flex-col">
                       <span>{buyer.companyName}</span>
@@ -115,8 +115,15 @@ const BuyerTable = ({ buyers = [], onSelectBuyer, onViewBuyer, onDeleteBuyer }) 
                     </div>
                   </td>
 
+                  {/* Step 9 & 4: Display Real Email or "Email not found" */}
                   <td className="py-4 px-6 font-semibold text-slate-800">
-                    <span className="font-mono text-xs">{buyer.email}</span>
+                    {buyer.email ? (
+                      <span className="font-mono text-xs text-slate-900">{buyer.email}</span>
+                    ) : (
+                      <span className="text-slate-400 italic text-xs font-medium bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
+                        Email not found
+                      </span>
+                    )}
                   </td>
 
                   <td className="py-4 px-6">
@@ -130,7 +137,11 @@ const BuyerTable = ({ buyers = [], onSelectBuyer, onViewBuyer, onDeleteBuyer }) 
                   </td>
 
                   <td className="py-4 px-6">
-                    {buyer.emailVerified ? (
+                    {!buyer.email ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200">
+                        Not Available
+                      </span>
+                    ) : buyer.emailVerified ? (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                         <CheckCircle2 className="w-3 h-3 mr-1" /> Verified
                       </span>

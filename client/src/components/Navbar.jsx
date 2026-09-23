@@ -1,11 +1,31 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { Globe, User, ShieldCheck, Sparkles, Send } from 'lucide-react';
+import API from '../services/api';
+import { Globe, User, ShieldCheck, AlertTriangle, XCircle, Send } from 'lucide-react';
 
 const Navbar = ({ title }) => {
   const { user } = useAuth();
   const location = useLocation();
+  const [apiStatus, setApiStatus] = useState({ loading: true, demoMode: true, configured: false, error: false });
+
+  useEffect(() => {
+    fetchApiStatus();
+  }, []);
+
+  const fetchApiStatus = async () => {
+    try {
+      const res = await API.get('/buyers/api-status');
+      setApiStatus({
+        loading: false,
+        demoMode: Boolean(res.data?.demoMode),
+        configured: Boolean(res.data?.configured),
+        error: false
+      });
+    } catch (err) {
+      setApiStatus({ loading: false, demoMode: true, configured: false, error: true });
+    }
+  };
 
   const getPageTitle = () => {
     if (title) return title;
@@ -24,10 +44,28 @@ const Navbar = ({ title }) => {
     <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-8 py-4 flex items-center justify-between">
       <div className="flex items-center space-x-3">
         <h2 className="text-xl font-bold text-slate-900 tracking-tight">{getPageTitle()}</h2>
-        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-          <ShieldCheck className="w-3.5 h-3.5 mr-1" />
-          API Live Engine
-        </span>
+        
+        {/* Step 6 & 13: Truthful Status Badge */}
+        {apiStatus.loading ? (
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+            Checking status...
+          </span>
+        ) : apiStatus.error ? (
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+            <XCircle className="w-3.5 h-3.5 mr-1 text-rose-600" />
+            API Error
+          </span>
+        ) : apiStatus.demoMode ? (
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+            <AlertTriangle className="w-3.5 h-3.5 mr-1 text-amber-600" />
+            Demo Mode
+          </span>
+        ) : (
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <ShieldCheck className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+            Live API Connected
+          </span>
+        )}
       </div>
 
       <div className="flex items-center space-x-4">
