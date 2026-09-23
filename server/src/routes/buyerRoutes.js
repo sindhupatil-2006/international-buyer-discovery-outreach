@@ -16,8 +16,8 @@ const searchLimiter = rateLimit({
   }
 });
 
-// Step 14: API status endpoint
-router.get('/api-status', protect, buyerController.getApiStatus);
+// Step 14: API status endpoint (Public status check)
+router.get('/api-status', buyerController.getApiStatus);
 
 router.post('/search', protect, searchLimiter, searchValidation, buyerController.search);
 router.get('/', protect, buyerController.getBuyers);
